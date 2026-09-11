@@ -50,7 +50,8 @@ Codex 和 Claude 正在干什么、额度还剩多少、哪个任务卡住了需
 ### 1. 拉代码，装依赖
 
 ```bash
-git clone <这个仓库的地址> && cd lx04-status-display
+git clone https://github.com/cenzihao1987-svg/lx04-status-display.git
+cd lx04-status-display
 ```
 
 这个项目站在 [yihong0618/mibe](https://github.com/yihong0618/mibe) 上——它负责盯 Codex 的会话日志。
@@ -184,7 +185,12 @@ viewport 被锁死了。这块屏物理 800×480，但浏览器眼里只有 534�
 
 ## 鸣谢
 
-- **[影视飓风](https://space.bilibili.com/946974)** —— 背景视频来自他们公开的免费样片。仓库里的是经过裁切、调色、重编码和循环重排的衍生片段，不是原片
+- **[影视飓风](https://www.ysjf.com/material)** —— 背景视频衍生自他们公开发布的免费样片。
+
+  仓库里的 `display/meili.mp4` 和 `display/canyon.mp4` **不是原片**：已从 4K 裁切缩放到
+  800×480、重新调色（色温与饱和度均大幅调整）、转码成 H.264 并重排为无缝循环，
+  只作为本项目的界面背景。原始素材请到 [飓风素材库](https://www.ysjf.com/material) 获取。
+  如果权利人认为此处使用不当，请提 issue 告知，我会立即移除。
 - **[yihong0618/mibe](https://github.com/yihong0618/mibe)**（MIT）—— Codex 侧的事件采集和小爱音箱播报，这个项目是踩在它肩上做的
 - **[Unsplash](https://unsplash.com/)** —— 兜底用的静态背景图
 - **Roboto**（Apache 2.0）—— 界面字体。它是 Android 原生字体，这样 Mac 预览和真机显示才一致

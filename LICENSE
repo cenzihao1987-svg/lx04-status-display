@@ -25,7 +25,10 @@ SOFTWARE.
 背景视频与图片不适用本许可证，版权归各自作者所有：
 
 - display/meili.mp4, display/canyon.mp4
-  衍生自影视飓风公开的免费样片，经裁切、调色、重编码与循环重排。
+  衍生自影视飓风（杭州星奥传媒）公开发布的免费样片，非原片：
+  已裁切缩放至 800x480、重新调色、转码为 H.264 并重排为无缝循环，
+  仅用作本项目的界面背景。原始素材见 https://www.ysjf.com/material
+  如权利人认为此处使用不当，请提 issue，将立即移除。
 - display/*.jpg
   来自 Unsplash，遵循 Unsplash License。
 - display/roboto-*.woff2
