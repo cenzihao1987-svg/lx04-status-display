@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!-- 千万别加 initial-scale=1：这块屏物理 800x480，但 density=240 让它在浏览器眼里
+     只有 534x320 CSS px。锁死 scale=1 就是把 800 宽的页面按 1:1 塞进 534 的视口，
+     只能露出 67%。不锁，浏览器自己缩到 0.6675，渲染出来正好 1:1 物理像素。 -->
+<meta name="viewport" content="width=800, viewport-fit=cover">
+<title>Codex</title>
+<style>
+  /* 自带 Roboto，两端才一致：system-ui 在 Mac 上解析成 SF Pro、在 Android 上是 Roboto，
+     字形差异明显。Roboto 是 Android 原生字体且 Apache 2.0 可自由分发（SF Pro 不行）。
+     必须是静态字重——Chromium 61 不支持可变字体，可变版本会整个 fallback 掉。 */
+  @font-face { font-family:'Roboto'; font-style:normal; font-weight:400;
+               font-display:swap; src:url(roboto-400.woff2) format('woff2'); }
+  @font-face { font-family:'Roboto'; font-style:normal; font-weight:500;
+               font-display:swap; src:url(roboto-500.woff2) format('woff2'); }
+  @font-face { font-family:'Roboto'; font-style:normal; font-weight:700;
+               font-display:swap; src:url(roboto-700.woff2) format('woff2'); }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html { height:100%; }
+  html, body {
+    width:800px; background:#000; color:#fff;
+    overflow-x:hidden;
+    /* 横向手势归我们，纵向留给浏览器——它要靠竖滑来收起顶部控制条 */
+    -ms-touch-action:pan-y; touch-action:pan-y;
+    /* Roboto 只覆盖拉丁字形；中文仍走系统字体（Mac 是 PingFang，设备上是 Noto Sans CJK） */
+    font-family:Roboto,"PingFang SC","Noto Sans CJK SC","Droid Sans Fallback",sans-serif;
+    -webkit-font-smoothing:antialiased; user-select:none; cursor:none;
+  }
+  /* 比视口高一点：给浏览器留出收起控制条所需的滚动量。
+     内容是 fixed 的，所以这段滚动不会把界面推走。 */
+  body { padding:0; min-height:calc(100% + 90px); }
+
+  /* 两页并排放进一条 1600px 的横轨，靠平移切换。
+     必须 absolute：否则 1600px 会撑开文档，viewport=800 的老 WebView 会把整页缩到 50%。 */
+  .stage {
+    position:fixed; top:0; left:0; width:800px; height:480px; overflow:hidden; z-index:1;
+  }
+  .deck {
+    position:absolute; top:0; left:0; width:1600px; height:480px;
+    -webkit-transition:-webkit-transform .28s ease; transition:transform .28s ease;
+  }
+  .deck.p1 { -webkit-transform:translateX(-800px); transform:translateX(-800px); }
+  /* 滑动是全局最重的一帧（1600×480 整体位移），期间把运镜停掉、
+     并临时提示合成层。will-change 只在这 0.3 秒存在，不常驻。 */
+  .deck.dragging { will-change:transform; }
+  .deck.dragging .photo { -webkit-animation-play-state:paused; animation-play-state:paused; }
+  .page { position:absolute; top:0; width:800px; height:480px; }
+  .page.a { left:0; }
+  .page.b { left:800px; }
+
+  /* 指示点落在卡片底部那 30px 空白里，不跟着 deck 平移 */
+  .dots { position:fixed; left:0; width:800px; bottom:14px; text-align:center; z-index:5; }
+  .dots i {
+    display:inline-block; width:6px; height:6px; margin:0 5px; border-radius:50%;
+    background:rgba(255,255,255,.22);
+    -webkit-transition:background .2s; transition:background .2s;
+  }
+  .dots i.on { background:rgba(255,255,255,.7); }
+
+  .card {
+    position:relative; width:800px; height:480px;
+    overflow:hidden; color:#fff; background:#0a0d12;
+  }
+
+  /* 照片：主峰在原图 (33%,20%)，对到卡片 (66%,24%)。
+     原图是高调灰白全景，先压暗再强拉对比做 S 曲线：
+     白雪 1.0 → .46 → .44，中间调 .5 → .23 → .09，雪脊留住，其余沉进底色。
+     老 WebView 只认带前缀的 filter，两个都写。 */
+  /* 图已预裁成 772×452（和卡片 1:1），几何统一 cover，逐张只剩调色。
+     运镜必须用 transform：动 background-position 会每帧作废整张 paint、
+     重光栅 + 重跑滤镜，约 1.4MB/帧。 */
+  .photo {
+    position:absolute; top:0; right:0; bottom:0; left:0; z-index:0;
+    background-repeat:no-repeat; background-position:center; background-size:cover;
+    /* 调色已烘进 JPEG，这里不留 filter：每帧的色彩矩阵 shader 没了。
+       也不用 will-change——它让每层常驻显存并按最大 scale 光栅化，
+       在 GE8300 这种入门 GPU 上会直接压垮填充率。
+       自带圆角让 .card 的 overflow 裁剪变成空操作，省掉每帧 mask 合成。 */
+    -webkit-backface-visibility:hidden; backface-visibility:hidden;
+    -webkit-transition:opacity 3.5s cubic-bezier(.45,0,.55,1);
+            transition:opacity 3.5s cubic-bezier(.45,0,.55,1);
+    -webkit-animation:kb 16s ease-in-out infinite alternate;
+            animation:kb 16s ease-in-out infinite alternate;
+  }
+  /* alternate + ease-in-out：往返走同一条路，端点速度归零，永远没有循环接缝。
+     幅度核算（transform 里 translate 在 scale 之前，所以 px 就是屏幕 px）：
+       scale 恒定 1.18（只用来撑出平移空间，全程不变 → 重光栅次数为零）
+       水平溢出 800×.18/2 = 72，减去 tx 58 → 左右余量 14
+       垂直溢出 480×.18/2 = 43.2，减去 ty 28 → 上下余量 15.2
+     Chrome 按 scale 的变化量决定要不要重光栅；scale 不动，纹理就只需光栅化一次，
+     之后每帧只是把它挪个位置——这是 GPU 上最便宜的操作。
+     全程总位移 116px（上一版 95px），16 秒走完。
+     调节旋钮优先动 duration；要改 keyframes 数值必须重算上面这组余量。 */
+  @-webkit-keyframes kb {
+    from { -webkit-transform:translate3d(-58px,-28px,0) scale(1.18); }
+    to   { -webkit-transform:translate3d( 58px, 28px,0) scale(1.18); }
+  }
+  @keyframes kb {
+    from { transform:translate3d(-58px,-28px,0) scale(1.18); }
+    to   { transform:translate3d( 58px, 28px,0) scale(1.18); }
+  }
+
+  /* 逐张只有这一条。必须写 background-image，不能用 background 简写——
+     简写会把基类的 size/position/repeat 一起重置回默认值。
+     .tint/.veil 保持页级不做逐张，逐张差异全由 filter 吸收：
+     这要求同一页的所有图能吃同一层罩（冷调雪山 / 暖调峡谷各成一组）。 */
+  .s-ridge  { background-image:url(ridge.jpg); }
+  .s-alex   { background-image:url(alex.jpg); }
+  .s-canyon { background-image:url(canyon.jpg); }
+  .s-joc    { background-image:url(joc.jpg); }
+  .s-yun    { background-image:url(yun.jpg); }
+  .veil {
+    position:absolute; top:0; right:0; bottom:0; left:0; pointer-events:none; z-index:3;
+    background:
+      radial-gradient(42% 50% at 88% 62%, rgba(9,13,19,.34), transparent 74%),
+      linear-gradient(103deg, rgba(9,13,19,.66) 0%, rgba(9,13,19,.45) 30%,
+                              rgba(9,13,19,.10) 58%, rgba(9,13,19,.00) 100%),
+      linear-gradient(0deg, rgba(7,10,15,.62) 0%, rgba(7,10,15,.06) 34%, transparent 56%);
+  }
+  .inner { position:relative; z-index:4; height:100%; padding:44px 48px; display:flex; flex-direction:column; }
+
+  /* ── 抬头 ── */
+  .head { display:flex; align-items:center; height:64px; }
+  .head .mark { width:46px; height:46px; flex:none; }
+  .head .id { margin-left:14px; }
+  .head .id .nm { font-size:38px; font-weight:700; letter-spacing:-.018em; line-height:1.02; }
+  .head .when { margin-left:auto; text-align:right; line-height:1.32; }
+  .head .when .d { font-size:18px; color:rgba(255,255,255,.88); }
+  .head .when .l { font-size:18px; color:rgba(255,255,255,.5); }
+  /* step-end：0% 的值保持到 50% 再硬跳，是干净的方波，不是渐变 */
+  .when .cl { -webkit-animation:blink 1s step-end infinite; animation:blink 1s step-end infinite; }
+  @-webkit-keyframes blink { 0% { opacity:1 } 50% { opacity:.16 } }
+  @keyframes blink { 0% { opacity:1 } 50% { opacity:.16 } }
+  /* 离线就是「停住」的信号，冒号定住 */
+  body.offline .cl { -webkit-animation:none; animation:none; }
+  body.offline .photo { -webkit-animation-play-state:paused; animation-play-state:paused; }
+  /* 看不见的那一页不必动 —— 省一半合成，且暂停保相位，滑回来不跳 */
+  .deck:not(.p1) .page.b .photo,
+  .deck.p1       .page.a .photo { -webkit-animation-play-state:paused; animation-play-state:paused; }
+
+  .head .when .v { margin-top:1px; font-size:30px; font-weight:500; letter-spacing:-.012em;
+                   font-variant-numeric:tabular-nums; }
+
+  /* ── 用量 ── */
+  .usage { margin-top:22px; height:177px; display:flex; align-items:flex-start; }
+  .u { width:290px; }
+  .u .lb { font-size:20px; color:rgba(255,255,255,.66); letter-spacing:.005em; }
+  .u .big {
+    margin-top:2px; font-size:108px; font-weight:700; line-height:1.05;
+    letter-spacing:-.045em; font-variant-numeric:tabular-nums;
+  }
+  /* 数字用了 -.045em 负字距，% 被一起拽过去了，单独推开 */
+  .u .big i { font-style:normal; font-size:48px; font-weight:700;
+              margin-left:10px; letter-spacing:-.01em; }
+  .u .frac {
+    margin-top:4px; font-size:24px; color:rgba(255,255,255,.72);
+    font-variant-numeric:tabular-nums;
+  }
+  /* 额度见底才变色。平时不喊，喊了才有人听 */
+  .u.warn .big { color:#FFA033; }
+  .u.crit .big { color:#FF6B6B; }
+  .motto {
+    margin-left:auto; margin-top:56px; font-size:22px; line-height:1.34;
+    color:rgba(255,255,255,.92); letter-spacing:-.005em;
+    text-shadow:0 1px 14px rgba(0,0,0,.55);
+  }
+
+  /* ── 近期任务 ── */
+  /* 高度写死：标题行去掉了，但框不缩，任务在里面上下居中 */
+  .recent {
+    position:relative; margin-top:auto; height:117px;
+    border-radius:20px; padding:0 13px; display:flex; align-items:center;
+    /* backdrop-filter 老 WebView 不认，底色本身就够实，糊不了就当没有 */
+    background:rgba(17,22,30,.72); -webkit-backdrop-filter:blur(18px); backdrop-filter:blur(18px);
+    border:1px solid rgba(255,255,255,.07);
+  }
+  /* 播报开关浮到右上角，不进流里，免得把任务顶偏 */
+  .recent .go {
+    position:absolute; top:11px; right:15px;
+    min-width:34px; height:34px; padding:0 13px; border-radius:999px;
+    background:rgba(255,255,255,.12); border:0; color:rgba(255,255,255,.62);
+    font:inherit; font-size:16px; line-height:34px; letter-spacing:.02em;
+  }
+  .recent .go.on { background:rgba(76,217,115,.20); color:#7BE39A; }
+  /* grid 要 Chrome 57、flex gap 要 84，这块屏都够不着，退回 flex + margin */
+  .jobs { flex:1; min-width:0; display:flex; height:74px; }
+  .j { flex:1 1 0; display:flex; align-items:center; min-width:0;
+       padding:0 9px; margin-right:12px; border-radius:10px; }
+  .j:last-child { margin-right:0; }
+
+  /* 刚做完：头 24 秒是抢眼的绿光，之后落到一层淡底一直留到第 10 分钟才淡出。
+     这块屏是偶尔瞥一眼的，只闪 10 秒等于没有——离开倒杯咖啡回来还得能看见。
+     百分比全是按 600s 换算的（1.3%≈8s，4%≈24s，92%≈9.2min），
+     用 linear：节奏已经由关键帧自己排好，再叠缓动会把时间轴拧歪。 */
+  .j.fresh { -webkit-animation:fresh 600s linear 1 both; animation:fresh 600s linear 1 both; }
+  @-webkit-keyframes fresh { 0%  { background-color:rgba(52,211,120,.30); }
+                            1.3% { background-color:rgba(52,211,120,.26); }
+                              4% { background-color:rgba(52,211,120,.10); }
+                             92% { background-color:rgba(52,211,120,.10); }
+                            100% { background-color:rgba(52,211,120,0); } }
+  @keyframes fresh { 0%  { background-color:rgba(52,211,120,.30); }
+                    1.3% { background-color:rgba(52,211,120,.26); }
+                      4% { background-color:rgba(52,211,120,.10); }
+                     92% { background-color:rgba(52,211,120,.10); }
+                    100% { background-color:rgba(52,211,120,0); } }
+
+  /* 该你了（要授权 / 在问你）：不会自己消失，一直呼吸 */
+  .j.wait { -webkit-animation:wait 1.9s ease-in-out infinite; animation:wait 1.9s ease-in-out infinite; }
+  @-webkit-keyframes wait { 0%,100% { background-color:rgba(255,166,56,.09); }
+                              50%   { background-color:rgba(255,166,56,.24); } }
+  @keyframes wait { 0%,100% { background-color:rgba(255,166,56,.09); }
+                      50%   { background-color:rgba(255,166,56,.24); } }
+
+  .j .ic { width:24px; height:24px; flex:none; margin-right:11px; border-radius:50%; }
+  .j .tx { flex:1 1 0; min-width:0; overflow:hidden; }
+  .j .tt { font-size:17px; color:#fff; line-height:1.28; overflow:hidden; }
+  .j .tt .mv { white-space:nowrap; }
+  /* 只有装不下的名字才加 run：滚一整份的宽度，两份首尾相接所以无缝 */
+  .j .tt.run .mv { -webkit-animation:mq linear infinite; animation:mq linear infinite; }
+  .j .tt.run .mv span { padding-right:56px; }
+  @-webkit-keyframes mq { 0%,14%   { -webkit-transform:translateX(0); }
+                          86%,100% { -webkit-transform:translateX(-50%); } }
+  @keyframes mq { 0%,14%   { transform:translateX(0); }
+                  86%,100% { transform:translateX(-50%); } }
+  .j .sb {
+    margin-top:2px; font-size:15px; color:rgba(255,255,255,.5); line-height:1.24;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .j .sb b { font-weight:400; color:#4C93F5; }
+  .j.wait .sb b { color:#FFA638; }
+  .empty { color:rgba(255,255,255,.34); font-size:17px; line-height:74px; }
+
+  /* Claude 页：品牌色 clay #D97757，和 Codex 页的冷蓝分开 */
+  /* 这张自带暖调，冷罩会把它压脏，改成极淡的中性罩只收一点饱和 */
+  .page.b .tint { background:rgba(30,22,18,.14); }
+  .page.b .veil {
+    background:
+      radial-gradient(46% 54% at 86% 44%, rgba(10,8,12,.48), transparent 78%),
+      linear-gradient(103deg, rgba(10,8,12,.63) 0%, rgba(10,8,12,.42) 32%,
+                              rgba(10,8,12,.09) 60%, rgba(10,8,12,.00) 100%),
+      linear-gradient(0deg, rgba(8,6,10,.62) 0%, rgba(8,6,10,.08) 34%, transparent 56%);
+  }
+  .page.b .head .mark { fill:#D97757; }
+  .page.b .j .sb b { color:#D97757; }
+
+  body.offline .card { -webkit-filter:grayscale(1); filter:grayscale(1); }
+
+  /* ── 视频背景（仅 Codex 页）──
+     渐进增强：图片层始终垫在下面，视频真的播起来了才淡入盖住它，
+     淡入走完再把图片层摘掉。autoplay 被禁或解码失败都会静静停在图片上，
+     绝不会黑屏。状态挂 <html>，因为 render() 每 2 秒清空 body.className。 */
+  .vid {
+    position:absolute; top:0; right:0; bottom:0; left:0; z-index:0;
+    width:800px; height:480px; object-fit:cover; opacity:0;
+    -webkit-backface-visibility:hidden; backface-visibility:hidden;
+    -webkit-transition:opacity .8s linear; transition:opacity .8s linear;
+  }
+  html.vid-a .page.a .vid, html.vid-b .page.b .vid { opacity:1; }
+  html.vidx-a .page.a .photo { display:none; }
+  html.vidx-b .page.b .photo { display:none; }
+
+</style>
+</head>
+<body>
+  <div class="stage">
+  <div class="deck" id="deck">
+    <div class="page a" data-k="codex">
+    <div class="card">
+      <video class="vid" muted loop playsinline webkit-playsinline preload="auto"></video>
+      <div class="photo s-ridge"></div>
+    <div class="photo"></div>
+        <div class="veil"></div>
+
+      <div class="inner">
+        <div class="head">
+          <svg class="mark" viewBox="0 0 24 24" fill="#fff">
+            <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/>
+          </svg>
+          <div class="id">
+            <div class="nm">Codex</div>
+          </div>
+          <div class="when">
+            <div class="d today">—</div>
+            <div class="v clock"><span class="hh">--</span><span class="cl">:</span><span class="mm">--</span></div>
+          </div>
+        </div>
+
+        <div class="usage">
+          <div class="u">
+            <div class="lb">5h Remaining</div>
+            <div class="big">—</div>
+            <div class="frac"></div>
+          </div>
+          <div class="u">
+            <div class="lb">Weekly Remaining</div>
+            <div class="big">—</div>
+            <div class="frac"></div>
+          </div>
+          <div class="motto">Small<br>tasks.<br>Big progress.</div>
+        </div>
+
+        <div class="recent">
+          <button class="go" id="speak" hidden>播报</button>
+          <div class="jobs"></div>
+        </div>
+      </div>
+    </div>
+    </div>
+    <div class="page b" data-k="claude">
+    <div class="card">
+      <video class="vid" muted loop playsinline webkit-playsinline preload="auto"></video>
+      <div class="photo s-canyon"></div>
+    <div class="photo"></div>
+        <div class="veil"></div>
+
+      <div class="inner">
+        <div class="head">
+          <svg class="mark" viewBox="0 0 24 24" fill="#fff"><path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/>
+          </svg>
+          <div class="id">
+            <div class="nm">Claude</div>
+          </div>
+          <div class="when">
+            <div class="d today">—</div>
+            <div class="v clock"><span class="hh">--</span><span class="cl">:</span><span class="mm">--</span></div>
+          </div>
+        </div>
+
+        <div class="usage">
+          <div class="u">
+            <div class="lb">5h Used</div>
+            <div class="big">—</div>
+            <div class="frac"></div>
+          </div>
+          <div class="u">
+            <div class="lb">Weekly Used</div>
+            <div class="big">—</div>
+            <div class="frac"></div>
+          </div>
+          <div class="motto">Small<br>tasks.<br>Big progress.</div>
+        </div>
+
+        <div class="recent">
+          <div class="jobs"></div>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+  </div>
+  <div class="dots" id="dots"><i class="on"></i><i></i></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let offline = 0;
+
+const pad = n => (n < 10 ? '0' : '') + n;
+const DAY = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+// 倒计时只给两档，够看就行：5d 16h / 2h 14m / 18m
+function until(ts) {
+  if (!ts) return null;
+  let s = ts - Date.now() / 1000;
+  if (s <= 0) return 'now';
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  if (d) return d + 'd ' + h + 'h';
+  if (h) return h + 'h ' + m + 'm';
+  return Math.max(m, 1) + 'm';
+}
+
+// 累计耗时：45s / 12m / 3h 59m
+function dur(ms) {
+  const s = Math.round((ms || 0) / 1000);
+  if (s < 60) return s + 's';
+  const m = Math.round(s / 60);
+  if (m < 60) return m + 'm';
+  return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+}
+
+// 每个窗口报自己的重置时间
+function resetLine(w) {
+  if (!w || !w.resets_at) return '';
+  const t = until(w.resets_at);
+  return t === 'now' ? 'Resetting now' : 'Resets in ' + t;
+}
+
+function quota(box, w, used) {
+  const big = box.querySelector('.big'), frac = box.querySelector('.frac');
+  if (!w || w.remaining === undefined) {
+    box.className = 'u'; big.textContent = '—'; frac.textContent = '';
+    return;
+  }
+  // used 模式下数值和告警方向都要翻过来：剩得少 = 用得多 = 危险
+  const v = used ? 100 - w.remaining : w.remaining;
+  const level = used
+    ? (v >= 90 ? ' crit' : v >= 75 ? ' warn' : '')
+    : (v <= 10 ? ' crit' : v <= 25 ? ' warn' : '');
+  box.className = 'u' + level;
+  big.innerHTML = v + '<i>%</i>';
+  frac.textContent = resetLine(w);
+}
+
+const ICON = {
+  Done:          '<circle cx="13" cy="13" r="13" fill="#22C55E"/><path d="M7.6 13.4l3.5 3.4 7-7.2" stroke="#fff" stroke-width="2.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  Working:       '<circle cx="13" cy="13" r="11.3" fill="none" stroke="#2F80ED" stroke-width="3.1"/>',
+  NeedsApproval: '<circle cx="13" cy="13" r="11.3" fill="none" stroke="#FFA638" stroke-width="3.1"/>',
+  idle:          '<circle cx="13" cy="13" r="11.3" fill="none" stroke="#5A6470" stroke-width="3.1"/>',
+};
+
+function subline(t) {
+  const d = t.total_ms == null ? '' : ' · ' + dur(t.total_ms);
+  switch (t.state) {
+    case 'Working':       return '<b>Running</b>' + d;
+    case 'NeedsApproval': return '<b>Your turn</b>' + d;
+    case 'Stopped':       return 'Stopped' + d;
+    case 'Done':          return 'Done' + d;
+    default:              return 'Idle';
+  }
+}
+
+const esc = s => String(s).replace(/[&<>]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[c]));
+
+const FRESH = 600;  // 秒。和上面 .j.fresh 的动画时长必须一致
+
+function jobClass(t) {
+  if (t.state === 'NeedsApproval') return ' wait';
+  if (t.state === 'Done' && t.age_seconds < FRESH) return ' fresh';
+  return '';
+}
+
+// 负 delay：页面是中途打开的话，动画从它本该在的位置接着播，而不是重头来
+function jobStyle(t) {
+  if (t.state !== 'Done' || t.age_seconds >= FRESH) return '';
+  const d = '-' + t.age_seconds + 's';
+  return ` style="-webkit-animation-delay:${d};animation-delay:${d}"`;
+}
+
+function renderJobs(page, tasks) {
+  // 只放得下 3 个；不够就空着，不编
+  const items = (tasks || []).slice(0, 3);
+  // 不把高亮算进 key：fresh 动画用 both 自己收尾，为摘 class 重建 DOM 只会打断走马灯
+  const key = items.map(t => t.project + '|' + t.state).join('~');
+  const jobs = page.el.querySelector('.jobs');
+
+  // 两页各留一份 key，否则会互相抑制 DOM 重建，走马灯和高亮全乱
+  if (key !== page.key) {
+    page.key = key;
+    jobs.innerHTML = items.length ? items.map(t => `
+      <div class="j${jobClass(t)}"${jobStyle(t)}>
+        <svg class="ic" viewBox="0 0 26 26">${ICON[t.state] || ICON.idle}</svg>
+        <div class="tx">
+          <div class="tt"><div class="mv"><span>${esc(t.project || 'Codex')}</span></div></div>
+          <div class="sb"></div>
+        </div>
+      </div>`).join('') : '<div class="empty">暂无任务</div>';
+    marquee(jobs);
+  }
+
+  // 耗时每次都刷，但只写文本不动结构，走马灯不受影响
+  const subs = jobs.querySelectorAll('.sb');
+  items.forEach((t, i) => { if (subs[i]) subs[i].innerHTML = subline(t); });
+}
+
+function marquee(jobs) {
+  const tts = jobs.querySelectorAll('.tt');
+  for (let i = 0; i < tts.length; i++) {
+    const tt = tts[i], mv = tt.firstElementChild;
+    // 差几个像素不值得为它滚一整个名字，裁掉那点比一直动好
+    if (mv.scrollWidth <= tt.clientWidth + 6) continue;
+    tt.className = 'tt run';                          // 先加 padding，再量
+    mv.innerHTML += mv.innerHTML;
+    const one = mv.scrollWidth / 2;
+    mv.style.webkitAnimationDuration = mv.style.animationDuration = (one / 26 / 0.72).toFixed(1) + 's';
+  }
+}
+
+// 两页各自的元素和渲染状态。key 必须分开存，否则两页互相抑制 DOM 重建。
+const PAGES = {
+  // used: 跟随各自官方的展示口径 —— Codex 讲「还剩多少」，Claude 讲「用了多少」
+  codex:  { el: document.querySelector('.page.a'), key: null, used: false },
+  claude: { el: document.querySelector('.page.b'), key: null, used: true },
+};
+const deck = $('deck'), dotEls = $('dots').children;
+
+// ── 显示哪一页 ──
+let view = 'codex', pin = null, pinAt = 0;
+const PIN_MS = 60000;   // 手动滑动后钉住多久，之后交还自动跟随
+
+function show(k) {
+  if (k === view || !PAGES[k]) return;
+  view = k;
+  // 分页状态挂 deck 不挂 body：render() 每次都会清掉 body.className
+  deck.classList.toggle('p1', k === 'claude');   // 用 toggle，别整体赋值——会冲掉 dragging
+  // 视频占着 VPU，看不见时必须停——比暂停运镜更值得省
+  for (const kk in PAGES) {
+    const vv = PAGES[kk].el.querySelector('.vid');
+    if (!vv || !vv.src) continue;
+    // 只暂停已经播出过的：还没触发 playing 就 pause，它这辈子都不会触发，
+    // 那一页就会永远卡在图片上（大文件加载慢时必现）
+    if (kk === k) {
+      // 这一页刚才在视口外时，浏览器可能已经把加载掐了，且不会自己恢复。
+      // readyState 还是 0 就主动再拉一次，否则滑过来只有一张静止的图片。
+      if (vv.readyState === 0) vv.load();
+      vv.play().catch(function () {});
+    } else if (vv._ok) vv.pause();
+  }
+  dotEls[0].className = k === 'codex' ? 'on' : '';
+  dotEls[1].className = k === 'claude' ? 'on' : '';
+}
+
+function pinTo(k) { pin = k; pinAt = Date.now(); show(k); }   // 手动：临时钉住
+
+function follow(active) {                                     // 自动：后端说了算
+  if (pin) {
+    if (Date.now() - pinAt < PIN_MS) return;
+    pin = null;                                               // 钉住到期，交还自动
+  }
+  show(active);
+}
+
+function renderPage(page, a) {
+  const us = page.el.querySelectorAll('.u'), u = a.usage || {};
+  quota(us[0], u.primary, page.used);
+  quota(us[1], u.secondary, page.used);
+  renderJobs(page, a.tasks);
+}
+
+// 冒号是 .cl 里的独立节点，只写 .hh/.mm，闪烁动画才不会每 2 秒被 render() 重建。
+// 以后要加秒数显示，也别往 .clock 整体写 textContent。
+function setClock(page, hh, mm) {
+  page.el.querySelector('.hh').textContent = hh;
+  page.el.querySelector('.mm').textContent = mm;
+}
+
+function render(d) {
+  document.body.className = '';
+  const now = new Date();
+  const date = DAY[now.getDay()] + ', ' + MON[now.getMonth()] + ' ' + now.getDate();
+
+  for (const k in PAGES) {
+    const page = PAGES[k], a = (d.agents || {})[k];
+    page.el.querySelector('.today').textContent = date;
+    setClock(page, pad(now.getHours()), pad(now.getMinutes()));
+    if (a) renderPage(page, a);
+  }
+
+  follow(d.active);
+  renderSpeak(d.speaking);
+}
+
+// speaking 为 null 表示这次启动没开播报能力，开关不该出现
+function renderSpeak(v) {
+  const b = $('speak');
+  b.hidden = v === null || v === undefined;
+  b.className = 'go' + (v ? ' on' : '');
+  b.textContent = v ? '播报 开' : '播报 关';
+}
+
+$('speak').onclick = async () => {
+  try {
+    const r = await fetch('/api/speak', { method: 'POST' });
+    renderSpeak((await r.json()).speaking);
+  } catch (e) { /* 下一次轮询会把状态拉回来 */ }
+};
+
+async function tick() {
+  try {
+    const r = await fetch('/api/status', { cache: 'no-store' });
+    if (!r.ok) throw new Error(r.status);
+    render(await r.json());
+    offline = 0;
+  } catch (e) {
+    // 连续三次失败才判定离线，避免瞬时抖动就把屏幕灰掉
+    if (++offline >= 3) {
+      document.body.className = 'offline';
+      for (const k in PAGES) setClock(PAGES[k], '--', '--');
+      renderSpeak(null);
+    }
+  }
+}
+// ── 手势：跟手 + 磁吸 ──
+// 不能靠 touchmove 里的 preventDefault：老 WebView 上 document 级 touchmove 默认 passive，
+// 那句话会被静默忽略，浏览器照样自己滚。真正管用的是 CSS 的 touch-action:pan-y。
+const SNAP = 200;      // 拖过这么多才翻页，否则弹回原处
+let drag = false, startX = 0, startY = 0, baseX = 0, axis = null, lastTouch = 0;
+
+function baseOf(k) { return k === 'claude' ? -800 : 0; }
+
+document.addEventListener('touchstart', function (e) {
+  const t = e.changedTouches[0];
+  startX = t.clientX; startY = t.clientY;
+  baseX = baseOf(view); axis = null; drag = true;
+  lastTouch = Date.now();
+  deck.style.webkitTransition = deck.style.transition = 'none';   // 跟手时不要过渡
+  deck.classList.add('dragging');                                 // 停运镜、提示合成层
+}, false);
+
+document.addEventListener('touchmove', function (e) {
+  if (!drag) return;
+  const t = e.changedTouches[0], dx = t.clientX - startX, dy = t.clientY - startY;
+  // 先定轴：判成纵向就整段让给浏览器，它要靠这个收控制条
+  if (axis === null && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+    axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+  }
+  if (axis !== 'x') return;
+  // 夹在两页之间，滑不出界
+  const x = Math.max(-800, Math.min(0, baseX + dx));
+  deck.style.webkitTransform = deck.style.transform = 'translateX(' + x + 'px)';
+}, false);
+
+function endDrag(e) {
+  if (!drag) return;
+  drag = false;
+  lastTouch = Date.now();
+  deck.style.webkitTransition = deck.style.transition = '';   // 交还 CSS 过渡
+  deck.style.webkitTransform = deck.style.transform = '';     // 位置交还 class
+  // 等 0.28s 的回位过渡走完再恢复运镜，别在最重的那一帧上加动画
+  clearTimeout(window.dragT);
+  window.dragT = setTimeout(function () { deck.classList.remove('dragging'); }, 340);
+  if (axis !== 'x') return;
+  const dx = e.changedTouches[0].clientX - startX;
+  // 拖够了就翻页，不够就吸回原处——无论如何都停在整页上
+  pinTo(Math.abs(dx) >= SNAP ? (dx < 0 ? 'claude' : 'codex') : view);
+}
+document.addEventListener('touchend', endDrag, false);
+document.addEventListener('touchcancel', endDrag, false);
+
+// 退路：万一只送达 click 不送达 touch，点左右半屏也能切
+document.addEventListener('click', function (e) {
+  if (Date.now() - lastTouch < 700) return;      // 滑动尾部会补一个 click，滤掉
+  if (e.target.className.indexOf && e.target.className.indexOf('go') >= 0) return;
+  pinTo(e.clientX < 400 ? 'codex' : 'claude');
+}, false);
+
+// ── 背景轮换 ──
+// 每页两层：底层恒不透明，只把上层从 0 淡到 1。两层同时半透明是错的——
+// 中点各 .5 时覆盖率只有 75%，.card 底色会透上来，画面中途发暗。
+const SHOTS = {
+  codex:  ['s-ridge', 's-alex'],
+  claude: ['s-canyon', 's-joc', 's-yun'],
+};
+const SHOT_MS = 90000;    // 1.5 分钟
+
+for (const k in PAGES) {
+  PAGES[k].i = 0;
+  PAGES[k].photos = PAGES[k].el.querySelectorAll('.photo');
+  // 备用层平时不参与合成。用 visibility 不用 display —— 后者会让尺寸测量全变 0
+  PAGES[k].photos[1].style.visibility = 'hidden';
+}
+
+function advance(page, shots) {
+  page.i++;
+  const inc = page.photos[page.i & 1], out = page.photos[(page.i + 1) & 1];
+  inc.style.webkitTransition = inc.style.transition = 'none';
+  inc.style.opacity = '0';
+  inc.style.zIndex = '1';
+  out.style.zIndex = '0';
+  // 只增删 s-* token，photo 类全程不动 —— 整体赋值 className 会让 .photo
+  // 有一瞬间不匹配，运镜动画被移除再添加，currentTime 归零，两层就错相了。
+  const names = inc.className.split(' ');
+  for (let n = 0; n < names.length; n++) {
+    if (names[n].indexOf('s-') === 0) inc.classList.remove(names[n]);
+  }
+  inc.classList.add(shots[page.i % shots.length]);
+  void inc.offsetWidth;                                       // 让 opacity:0 先落地
+  inc.style.webkitTransition = inc.style.transition = '';     // 交还 CSS 的 3.5s
+  inc.style.visibility = '';
+  inc.style.opacity = '1';
+  // 淡入结束后收起出场层：稳态下只有一层在合成
+  clearTimeout(page.hideT);
+  page.hideT = setTimeout(function () { out.style.visibility = 'hidden'; }, 3700);
+}
+
+setInterval(function () {
+  if (offline >= 3) return;            // 离线是「定格」，不换图
+  for (const k in PAGES) advance(PAGES[k], SHOTS[k]);
+}, SHOT_MS);
+
+// ?page=codex|claude 固定某一页：触摸万一不可用时的退路，也方便对着看
+const forced = location.search.match(/[?&]page=(codex|claude)/);
+if (forced) pinTo(forced[1]);
+
+tick();
+setInterval(tick, 2000);
+
+// ── 视频背景：能播就播，播不了就安静地留在图片上 ──
+// 不用 autoplay 属性：靠 playing 事件确认「真的在放」才切换，
+// 老引擎没有 play() 的 Promise，playing 是两种引擎都可靠的信号。
+(function () {
+  if (/[?&]bg=img/.test(location.search)) return;   // 一键回退到图片
+  const root = document.documentElement;
+  // ?v= 由服务端按 mp4 的 mtime 填入，重烘后 URL 就变了，绕开浏览器的旧副本
+  const SRC = { a: 'meili.mp4?v=__V__', b: 'canyon.mp4?v=__V__' };  // a=Codex 雪山，b=Claude 峡谷
+  for (const side in SRC) {
+    const v = document.querySelector('.page.' + side + ' .vid');
+    if (!v) continue;
+    // 判据分两级，因为浏览器对视口外的 video 既不播也不加载——
+    // playing 和 loadeddata 都等不到，后台那一页会永远卡在图片上。
+    //
+    // 一级（乐观）：设了 src 就让视频层淡入。这一步安全，因为 .vid 没有 poster，
+    //   无数据时渲染成透明，底下垫着的 .photo 直接透上来，看到的仍是正常画面。
+    // 二级（保守）：真拿到第一帧才摘掉图片层。解不动就一直垫着，只多一层合成。
+    v.addEventListener('loadeddata', (function (s, el) {
+      return function () {
+        el._ok = 1;
+        if (root.className.indexOf('vidx-' + s) < 0) {
+          setTimeout(function () { root.className += ' vidx-' + s; }, 900);
+        }
+        if ((s === 'a') !== (view === 'codex')) el.pause();   // 不是当前页就让出 VPU
+      };
+    })(side, v), false);
+    v.src = SRC[side];
+    root.className += ' vid-' + side;
+    const p = v.play();
+    if (p && p.catch) p.catch(function () {});      // 被拒不吵，图片兜底
+  }
+})();
+
+</script>
+</body>
+</html>
