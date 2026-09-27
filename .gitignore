@@ -2,7 +2,8 @@ __pycache__/
 *.pyc
 .DS_Store
 .venv/
+/.workbuddy/
 
 # 上游项目，自带 .git（yihong0618/mibe）。
-# 本地那 25 行改动已导出成 vendor/mibe.patch，跟着版本库走。
+# 本项目对上游的适配已导出成 vendor/mibe.patch，跟着版本库走。
 /vendor/mibe/

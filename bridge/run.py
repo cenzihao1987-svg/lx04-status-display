@@ -481,19 +481,22 @@ class Handler(BaseHTTPRequestHandler):
         ctype = MIME[target.suffix.lower()]
         # 老 Chromium 的 <video> 后端一定发 Range，不给 206 它就干脆不播。
         # 这里的文件都是 MB 级，整读再切片就够，不值得为它引入流式读。
-        rng = _parse_range(self.headers.get("Range"), len(body))
-        if rng:
-            self._send_partial(body, ctype, rng[0], rng[1], etag)
-            return
         # 视频一律不缓存。Chromium 61 缓存分片响应的行为不可靠——实测会把半个文件
         # 存住，之后每次刷新都报 MEDIA_ERR_SRC_NOT_SUPPORTED。局域网重传 3MB 不到一秒，
         # 拿这点带宽换掉一整类偶发故障是划算的。
         # HTML 同样不缓存：改了页面刷新看不到，排查时会误判成代码没生效。
         ext = target.suffix.lower()
         cache = "no-store" if ext in (".html", ".mp4") else "max-age=86400"
+        # 老 Chromium 的 <video> 后端一定发 Range，所以视频实际走的是下面这条 206 分支。
+        # cache 必须一起传下去——_send_partial 里写死的 max-age 会把分片存住，上面那句
+        # 「视频不缓存」就形同虚设，一个残缺副本能赖满一天，播放器之后一直报解码失败。
+        rng = _parse_range(self.headers.get("Range"), len(body))
+        if rng:
+            self._send_partial(body, ctype, rng[0], rng[1], etag, cache)
+            return
         self._send(body, ctype, cache=cache, ranges=True, etag=etag)
 
-    def _send_partial(self, body, ctype, start, end, etag=None):
+    def _send_partial(self, body, ctype, start, end, etag=None, cache="max-age=86400"):
         chunk = body[start:end + 1]
         self.send_response(206)
         self.send_header("Content-Type", ctype)
@@ -501,7 +504,7 @@ class Handler(BaseHTTPRequestHandler):
         if etag:
             self.send_header("ETag", etag)
         self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Cache-Control", "max-age=86400")
+        self.send_header("Cache-Control", cache)
         self.send_header("Content-Length", str(len(chunk)))
         self.end_headers()
         self.wfile.write(chunk)

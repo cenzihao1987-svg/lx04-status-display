@@ -2,50 +2,46 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=800, initial-scale=1">
+<!-- 不锁 initial-scale：物理 800 ÷ dpr1.5 = 534 CSS 视口，锁了只能露出 67%（见 AGENTS.md） -->
+<meta name="viewport" content="width=800">
 <title>video diag</title>
 <style>
   /* 只用最老的 CSS，这一页必须在任何 WebView 上都显示得出来 */
   body { margin:0; padding:4px 8px; background:#000; color:#fff;
-         font-family:monospace,sans-serif; font-size:12px; line-height:1.28; }
-  h1 { margin:0 0 3px; font-size:15px; color:#8ab4ff; }
+         font-family:monospace,sans-serif; font-size:12px; line-height:1.3; }
+  h1 { margin:0 0 2px; font-size:15px; color:#8ab4ff; }
   table { border-collapse:collapse; }
-  td { padding:0 5px 0 0; vertical-align:top; }
+  td { padding:0 6px 0 0; vertical-align:top; white-space:nowrap; }
   td.k { color:#9aa4b2; }
   .ok { color:#4ade80; }
   .no { color:#ff6b6b; font-weight:bold; }
-  .wrap { margin-top:5px; }
-  .cell { display:inline-block; vertical-align:top; margin-right:5px; }
+  .env { color:#9aa4b2; margin-bottom:4px; }
+  .cell { display:inline-block; vertical-align:top; margin-right:14px; }
   /* 和 index.html 里 .vid 同一套写法，好复现拉伸 */
-  .shot { position:relative; width:240px; height:144px; overflow:hidden;
+  .shot { position:relative; width:200px; height:126px; overflow:hidden;
           border:1px solid #2b3442; background:#111; }
   .shot video { position:absolute; top:0; right:0; bottom:0; left:0;
-                width:240px; height:144px; object-fit:cover; }
-  /* 对照组：完全不设尺寸，让浏览器按视频固有比例摆 */
-  .raw video { width:240px; height:auto; }
-  .cap { color:#9aa4b2; font-size:12px; margin:2px 0 1px; }
+                width:200px; height:126px; object-fit:cover; }
+  .cap { color:#9aa4b2; margin:2px 0 1px; }
 </style>
 </head>
 <body>
 <h1>视频诊断</h1>
-<table id="env"></table>
+<div class="env" id="env"></div>
 
-<div class="wrap">
-  <div class="cell">
-    <div class="shot"><video id="v1" muted loop playsinline webkit-playsinline preload="auto"></video></div>
-    <div class="cap">meili · object-fit:cover</div>
-    <table id="t1"></table>
-  </div>
-  <div class="cell">
-    <div class="shot raw"><video id="v2" muted loop playsinline webkit-playsinline preload="auto"></video></div>
-    <div class="cap">meili · 不设 height（对照）</div>
-    <table id="t2"></table>
-  </div>
-  <div class="cell">
-    <div class="shot"><video id="v3" muted loop playsinline webkit-playsinline preload="auto"></video></div>
-    <div class="cap">canyon · object-fit:cover</div>
-    <table id="t3"></table>
-  </div>
+<div class="cell">
+  <div class="shot"><video id="v1" muted loop playsinline webkit-playsinline preload="auto"></video></div>
+  <div class="cap">meili（Codex）</div>
+  <table id="t1"></table>
+</div>
+<div class="cell">
+  <div class="shot"><video id="v2" muted loop playsinline webkit-playsinline preload="auto"></video></div>
+  <div class="cap">canyon（Claude）</div>
+  <table id="t2"></table>
+</div>
+
+<div class="env" id="tip" style="margin-top:6px">
+  点一下页面 = 补一次用户手势，然后自动重试 play()，看「重试」那行的结果
 </div>
 
 <script>
@@ -54,66 +50,77 @@ function row(k, v, good) {
   return '<tr><td class="k">' + k + '</td><td class="' + cls + '">' + v + '</td></tr>';
 }
 
-// ── 环境：视口对不对、object-fit 认不认 ──
-function cssOK(prop, val) {
-  var d = document.createElement('div');
-  d.style.cssText = prop + ':' + val;
-  return d.style.getPropertyValue(prop) !== '';
-}
+var NET = ['EMPTY', 'IDLE', 'LOADING', 'NO_SOURCE'];
+var ERRS = { 1:'ABORTED', 2:'NETWORK', 3:'DECODE', 4:'SRC_NOT_SUPPORTED' };
+
+// ── 环境 ──
 var e = [];
-e.push(row('viewport', window.innerWidth + ' x ' + window.innerHeight,
-           window.innerWidth === 800 && window.innerHeight === 480));
-e.push(row('screen', screen.width + ' x ' + screen.height));
-e.push(row('dpr', window.devicePixelRatio));
-e.push(row('object-fit', cssOK('object-fit', 'cover') ? '支持' : '不支持', cssOK('object-fit', 'cover')));
+e.push('视口 ' + window.innerWidth + 'x' + window.innerHeight);
+e.push('dpr ' + window.devicePixelRatio);
 var m = navigator.userAgent.match(/Chrome\/(\d+)/);
-e.push(row('Chrome', m ? m[1] : '未知'));
-e.push(row('canPlay h264', document.createElement('video')
-      .canPlayType('video/mp4; codecs="avc1.640028"') || '空（不支持 High）'));
-e.push(row('canPlay base', document.createElement('video')
-      .canPlayType('video/mp4; codecs="avc1.42E01E"') || '空'));
-document.getElementById('env').innerHTML = e.join('');
+e.push('Chrome ' + (m ? m[1] : '?'));
+e.push('可见 ' + document.visibilityState + (document.hidden ? '(hidden)' : ''));
+var fit = document.createElement('div');
+fit.style.cssText = 'object-fit:cover';
+e.push('object-fit ' + (fit.style.getPropertyValue('object-fit') ? '有' : '无'));
+document.getElementById('env').innerHTML = e.join(' · ');
 
-// ── 三路视频 ──
-var STATE = ['EMPTY', 'IDLE', 'LOADING', 'NO_SOURCE'];
-var ERRS = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
-var boot = [];
+// ── 两路视频，错开 3 秒起播：先让第一路独占 VPU ──
+var items = [];
 
-function watch(id, tid, src) {
+function watch(id, tid, src, delay) {
   var v = document.getElementById(id), t = document.getElementById(tid);
-  var log = '未开始';
-  v.addEventListener('loadeddata', function () { log = 'loadeddata'; }, false);
-  v.addEventListener('error', function () { log = 'error 事件'; }, false);
-  v.src = src + '?t=' + Date.now();       // 每次都绕开缓存，免得看到旧副本
-  var p = v.play();
-  if (p && p.then) {
-    p.then(function () { log = 'play OK'; },
-           function (err) { log = 'play 被拒: ' + (err && err.name); });
-  } else {
-    log = 'play() 无 Promise';
-  }
-  boot.push(function () {
-    var r = v.getBoundingClientRect();
-    var vr = v.videoWidth && v.videoHeight ? (v.videoWidth / v.videoHeight).toFixed(3) : '?';
-    var er = r.height ? (r.width / r.height).toFixed(3) : '?';
-    var s = [];
-    s.push(row('play', log, log.indexOf('OK') >= 0));
-    s.push(row('ready', v.readyState + (v.readyState >= 2 ? ' 有帧' : ' 无帧'), v.readyState >= 2));
-    s.push(row('net', v.networkState + ' ' + (STATE[v.networkState] || '')));
-    s.push(row('err', v.error ? (v.error.code + ' ' + (ERRS[v.error.code] || '')) : '无', !v.error));
-    s.push(row('固有', v.videoWidth + 'x' + v.videoHeight + ' (' + vr + ')'));
-    s.push(row('元素', Math.round(r.width) + 'x' + Math.round(r.height) + ' (' + er + ')'));
-    s.push(row('paused', v.paused ? '是（不动）' : '否（在播）', !v.paused));
-    s.push(row('time', v.currentTime.toFixed(2)));
-    t.innerHTML = s.join('');
-  });
+  var st = { v:v, t:t, ev:'未开始', pres:'还没调', last:-1, moved:false };
+  items.push(st);
+
+  v.addEventListener('loadeddata', function () { st.ev = 'loadeddata'; }, false);
+  v.addEventListener('playing',    function () { st.ev = 'playing'; }, false);
+  v.addEventListener('error',      function () { st.ev = 'error 事件'; }, false);
+
+  // ?t= 每次都绕开缓存，免得看到旧副本
+  v.src = src + '?t=' + Date.now();
+
+  st.attempt = function (label) {
+    var p = v.play();
+    if (p && p.then) {
+      p.then(function () { st.pres = label + ' OK'; },
+             function (err) { st.pres = label + ' 被拒 ' + ((err && err.name) || err); });
+    } else {
+      st.pres = label + ' 无 Promise';
+    }
+  };
+  setTimeout(function () { st.attempt('play'); }, delay);
 }
 
-watch('v1', 't1', 'meili.mp4');
-watch('v2', 't2', 'meili.mp4');
-watch('v3', 't3', 'canyon.mp4');
+watch('v1', 't1', 'meili.mp4', 0);
+watch('v2', 't2', 'canyon.mp4', 3000);
 
-setInterval(function () { for (var i = 0; i < boot.length; i++) boot[i](); }, 500);
+window.addEventListener('touchend', function () {
+  for (var i = 0; i < items.length; i++) items[i].attempt('touch');
+}, false);
+
+function draw(st) {
+  var v = st.v, r = v.getBoundingClientRect(), buf;
+  if (v.currentTime > st.last + 0.05) st.moved = true;
+  st.last = v.currentTime;
+  try { buf = v.buffered.length ? v.buffered.end(0).toFixed(1) + 's' : '0'; }
+  catch (x) { buf = '?'; }
+  var s = [];
+  s.push(row('play()', st.pres, st.pres.indexOf('OK') >= 0));
+  s.push(row('事件', st.ev, st.ev === 'playing'));
+  s.push(row('ready', v.readyState + (v.readyState >= 2 ? ' 有帧' : ' 无帧'), v.readyState >= 2));
+  s.push(row('net', v.networkState + ' ' + (NET[v.networkState] || '?'), v.networkState === 2));
+  s.push(row('err', v.error ? v.error.code + ' ' + (ERRS[v.error.code] || '') : '无', !v.error));
+  s.push(row('paused', v.paused ? '是' : '否', !v.paused));
+  s.push(row('time', v.currentTime.toFixed(2) + (st.moved ? ' 推进' : ' 不动'), st.moved));
+  s.push(row('buffered', buf));
+  s.push(row('muted/vol', v.muted + ' / ' + v.volume));
+  s.push(row('固有/元素', v.videoWidth + 'x' + v.videoHeight + ' / ' +
+             Math.round(r.width) + 'x' + Math.round(r.height)));
+  st.t.innerHTML = s.join('');
+}
+
+setInterval(function () { for (var i = 0; i < items.length; i++) draw(items[i]); }, 500);
 </script>
 </body>
 </html>

@@ -20,7 +20,7 @@ Codex 和 Claude 正在干什么、额度还剩多少、哪个任务卡住了需
 每页从上到下是三块：
 
 - **抬头** —— 谁的页面，加当前时间（冒号每秒闪一下，一眼看出屏没死）
-- **额度** —— 两个窗口的用量，和各自的重置倒计时。Codex 显示「还剩多少」，Claude 显示「已用多少」，各自对齐官方的说法
+- **额度** —— 两个窗口的用量和下一次重置时间。Codex 显示「还剩多少」，Claude 显示「已用多少」
 - **最近三个会话** —— 项目名、状态、累计耗时。刚完成的会亮一层绿底，持续 10 分钟
 
 背景是循环播放的视频，不是静态图。
@@ -38,6 +38,7 @@ Codex 和 Claude 正在干什么、额度还剩多少、哪个任务卡住了需
 
 - 你在用 Codex CLI 或者 Claude Code（至少一个，两个都用效果最好）
 - Python 3.11+
+- Mac 上的 Android Platform Tools（`adb`），并已允许 Mac 无线调试 LX04
 - 音箱上装一个能全屏的浏览器，推荐 [Via](https://viayoo.com/)（体积小，能隐藏地址栏）
 
 > 状态屏只读本地文件，不连任何云服务，也不需要小米账号。
@@ -62,7 +63,7 @@ git clone https://github.com/yihong0618/mibe.git vendor/mibe
 cd vendor/mibe && git apply ../mibe.patch && uv sync && cd ../..
 ```
 
-补丁只有 25 行，做的事都记在 [docs/使用说明.md](docs/使用说明.md) 的「我们改了 mibe 什么」里。
+补丁为状态事件、免音箱登录、播报控制和低占用轮询做了适配，具体内容见 [docs/使用说明.md](docs/使用说明.md) 的「我们改了 mibe 什么」。
 
 ### 2. 启动
 
@@ -81,7 +82,15 @@ cd vendor/mibe && git apply ../mibe.patch && uv sync && cd ../..
 
 ### 3. 在音箱上打开
 
-音箱浏览器里输入同一个地址，全屏。完事。
+Mac 和音箱通过无线 ADB 连接后，运行开机自启安装脚本：
+
+```bash
+./scripts/install-agent.sh
+```
+
+Via 会打开固定地址 `http://127.0.0.1:8477/`。这里的 `127.0.0.1` 指音箱本机，由代理转到 Mac 状态服务，因此 Mac 的 DHCP 地址变化后不需要改音箱书签。断线恢复时代理会刷新当前页，不会新增页签。
+
+代理默认自动读取 Mac 的 Wi-Fi IPv4。如果你的 Wi-Fi 不在 `en0`，按 [使用说明](docs/使用说明.md#指定-mac-的局域网地址可选) 配置 `mac_ip`。
 
 ---
 
@@ -98,8 +107,11 @@ cd vendor/mibe && git apply ../mibe.patch && uv sync && cd ../..
 | 干什么 | 命令 |
 | --- | --- |
 | 看日志 | `tail -f ~/Library/Logs/lx04-status.log` |
-| 改完代码重启 | `launchctl kickstart -k gui/$(id -u)/com.lx04.status` |
-| 卸载 | `launchctl unload ~/Library/LaunchAgents/com.lx04.status.plist && rm ~/Library/LaunchAgents/com.lx04.status.plist` |
+| 看 ADB 代理日志 | `tail -f ~/Library/Logs/lx04-adb-bridge.log` |
+| 改完状态代码重启 | `launchctl kickstart -k gui/$(id -u)/com.gerry.lx04-status` |
+| 重启 ADB 代理 | `launchctl kickstart -k gui/$(id -u)/com.gerry.lx04-adb-bridge` |
+
+安装脚本会创建状态屏和 ADB 代理两个 LaunchAgent。卸载时需要同时卸载 `com.gerry.lx04-status` 和 `com.gerry.lx04-adb-bridge`。
 
 ---
 

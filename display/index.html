@@ -361,17 +361,6 @@ const pad = n => (n < 10 ? '0' : '') + n;
 const DAY = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-// 倒计时只给两档，够看就行：5d 16h / 2h 14m / 18m
-function until(ts) {
-  if (!ts) return null;
-  let s = ts - Date.now() / 1000;
-  if (s <= 0) return 'now';
-  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
-  if (d) return d + 'd ' + h + 'h';
-  if (h) return h + 'h ' + m + 'm';
-  return Math.max(m, 1) + 'm';
-}
-
 // 累计耗时：45s / 12m / 3h 59m
 function dur(ms) {
   const s = Math.round((ms || 0) / 1000);
@@ -381,11 +370,12 @@ function dur(ms) {
   return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
 }
 
-// 每个窗口报自己的重置时间
+// 5 小时窗口当天重置，只显示时间；周窗口保留日期和时间。
 function resetLine(w) {
   if (!w || !w.resets_at) return '';
-  const t = until(w.resets_at);
-  return t === 'now' ? 'Resetting now' : 'Resets in ' + t;
+  const d = new Date(w.resets_at * 1000);
+  const time = pad(d.getHours()) + ':' + pad(d.getMinutes());
+  return w.window_minutes === 300 ? 'Next reset ' + time : MON[d.getMonth()] + ' ' + d.getDate() + ' · ' + time;
 }
 
 function quota(box, w, used) {
@@ -710,7 +700,15 @@ setInterval(tick, 2000);
         if (root.className.indexOf('vidx-' + s) < 0) {
           setTimeout(function () { root.className += ' vidx-' + s; }, 900);
         }
-        if ((s === 'a') !== (view === 'codex')) el.pause();   // 不是当前页就让出 VPU
+        if ((s === 'a') !== (view === 'codex')) {
+          el.pause();                                  // 不是当前页就让出 VPU
+        } else if (el.paused) {
+          // 首帧到位后补一次起播。紧跟 src 的那次 play() 会被 src 触发的加载算法
+          // 以 AbortError 拒掉：实测真机上 readyState=4、error 为空、图片层也已摘掉，
+          // 但 paused 恒为 true、currentTime 停在 0——整页安静地定格，看不出哪里坏。
+          const pp = el.play();
+          if (pp && pp.catch) pp.catch(function () {});
+        }
       };
     })(side, v), false);
     v.src = SRC[side];
