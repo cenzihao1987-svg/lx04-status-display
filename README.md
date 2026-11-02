@@ -1,21 +1,25 @@
-# LX04 状态屏
+# LX04 状态屏 · v0.2.0
 
 把一台闲置的小米小爱触屏音箱，变成桌上的 AI 编码状态屏。
 
 ![放在桌上的效果](docs/images/hero.jpg)
 
-Codex 和 Claude 正在干什么、额度还剩多少、哪个任务卡住了需要你回去看一眼——
+Codex、Claude、WorkBuddy 和 DeepSeek 正在干什么、额度还剩多少、哪个任务卡住了需要你回去看一眼——
 抬头一瞥就知道，不用切回终端翻窗口。
 
 ---
 
 ## 它长什么样
 
-左右滑动切换两页，一页 Codex，一页 Claude。
+左右滑动切换四页：Codex、Claude、WorkBuddy、DeepSeek。手动切页后停留 60 秒，再自动跟随活跃任务。
 
 | Codex | Claude |
 | --- | --- |
 | ![Codex 页](docs/images/page-codex.jpg) | ![Claude 页](docs/images/page-claude.jpg) |
+
+| WorkBuddy | DeepSeek |
+| --- | --- |
+| ![WorkBuddy 页](docs/images/page-workbuddy.png) | ![DeepSeek 页](docs/images/page-deepseek.png) |
 
 每页从上到下是三块：
 
@@ -23,7 +27,9 @@ Codex 和 Claude 正在干什么、额度还剩多少、哪个任务卡住了需
 - **额度** —— 两个窗口的用量和下一次重置时间。Codex 显示「还剩多少」，Claude 显示「已用多少」
 - **最近三个会话** —— 项目名、状态、累计耗时。刚完成的会亮一层绿底，持续 10 分钟
 
-背景是循环播放的视频，不是静态图。
+Codex、Claude 使用视频背景；WorkBuddy 使用绿色植物背景；DeepSeek 使用海洋鲸鱼背景。
+
+WorkBuddy 显示积分剩余比例和余额；DeepSeek 显示 API 总余额与赠送余额。DeepSeek 总余额包含赠送余额，不能相加。没有可读取的任务时显示为空，取数失败显示「—」。
 
 ---
 
@@ -41,7 +47,7 @@ Codex 和 Claude 正在干什么、额度还剩多少、哪个任务卡住了需
 - Mac 上的 Android Platform Tools（`adb`），并已允许 Mac 无线调试 LX04
 - 音箱上装一个能全屏的浏览器，推荐 [Via](https://viayoo.com/)（体积小，能隐藏地址栏）
 
-> 状态屏只读本地文件，不连任何云服务，也不需要小米账号。
+> Codex、Claude 状态来自本地文件；WorkBuddy 和 DeepSeek 还会只读请求各自官方余额接口。凭证仅在 Mac 内存中使用，不发送到音箱，不需要小米账号。
 > （除非你要开语音播报，见[下面](#可选打开语音播报)）
 
 ---
@@ -231,3 +237,12 @@ export MI_PASS=你的密码
 MIT，见 [LICENSE](LICENSE)。
 
 背景视频和图片不适用本许可证，版权归各自作者所有，见上面的鸣谢。
+
+## v0.2.0 新增接入
+
+- WorkBuddy：读取本机 `.workbuddy/workbuddy.db` 的最近项目，以及已登录客户端的账号积分。需要本机安装并登录 WorkBuddy。
+- DeepSeek：从本机 `~/.config/config.json` 的 `responsesUpstream` 中读取已启用的官方 DeepSeek 上游，查询 API 余额。未找到配置时显示「—」。不自动创建或修改密钥配置。
+- DeepSeek 任务仅识别本机 Codex 会话中明确标记 `model_provider=deepseek` 的记录；当前不接入 DeepSeek 网页聊天历史。
+- WorkBuddy 每分钟刷新积分，DeepSeek 每分钟刷新余额；页面每两秒读取 Mac 状态。
+
+验证：`python scripts/test_workbuddy.py`、`python scripts/test_deepseek.py`（使用项目虚拟环境）。真实运行和等待授权状态的边界见 [WorkBuddy 验收](docs/WorkBuddy分页验收.md) 与 [DeepSeek 验收](docs/DeepSeek分页验收.md)。

@@ -33,23 +33,27 @@
      内容是 fixed 的，所以这段滚动不会把界面推走。 */
   body { padding:0; min-height:calc(100% + 90px); }
 
-  /* 两页并排放进一条 1600px 的横轨，靠平移切换。
-     必须 absolute：否则 1600px 会撑开文档，viewport=800 的老 WebView 会把整页缩到 50%。 */
+  /* 四页并排放进一条 3200px 的横轨，靠平移切换。
+     必须 absolute：否则 3200px 会撑开文档，viewport=800 的老 WebView 会把整页缩到 50%。 */
   .stage {
     position:fixed; top:0; left:0; width:800px; height:480px; overflow:hidden; z-index:1;
   }
   .deck {
-    position:absolute; top:0; left:0; width:1600px; height:480px;
+    position:absolute; top:0; left:0; width:3200px; height:480px;
     -webkit-transition:-webkit-transform .28s ease; transition:transform .28s ease;
   }
   .deck.p1 { -webkit-transform:translateX(-800px); transform:translateX(-800px); }
-  /* 滑动是全局最重的一帧（1600×480 整体位移），期间把运镜停掉、
+  .deck.p2 { -webkit-transform:translateX(-1600px); transform:translateX(-1600px); }
+  .deck.p3 { -webkit-transform:translateX(-2400px); transform:translateX(-2400px); }
+  /* 滑动是全局最重的一帧（横轨整体位移），期间把运镜停掉、
      并临时提示合成层。will-change 只在这 0.3 秒存在，不常驻。 */
   .deck.dragging { will-change:transform; }
   .deck.dragging .photo { -webkit-animation-play-state:paused; animation-play-state:paused; }
   .page { position:absolute; top:0; width:800px; height:480px; }
   .page.a { left:0; }
   .page.b { left:800px; }
+  .page.c { left:1600px; }
+  .page.d { left:2400px; }
 
   /* 指示点落在卡片底部那 30px 空白里，不跟着 deck 平移 */
   .dots { position:fixed; left:0; width:800px; bottom:14px; text-align:center; z-index:5; }
@@ -112,6 +116,8 @@
   .s-canyon { background-image:url(canyon.jpg); }
   .s-joc    { background-image:url(joc.jpg); }
   .s-yun    { background-image:url(yun.jpg); }
+  .s-plants { background-image:url(plants.jpg); }
+  .s-whale  { background-image:url(whale.jpg); }
   .veil {
     position:absolute; top:0; right:0; bottom:0; left:0; pointer-events:none; z-index:3;
     background:
@@ -135,8 +141,7 @@
   body.offline .cl { -webkit-animation:none; animation:none; }
   body.offline .photo { -webkit-animation-play-state:paused; animation-play-state:paused; }
   /* 看不见的那一页不必动 —— 省一半合成，且暂停保相位，滑回来不跳 */
-  .deck:not(.p1) .page.b .photo,
-  .deck.p1       .page.a .photo { -webkit-animation-play-state:paused; animation-play-state:paused; }
+  .page:not(.active) .photo { -webkit-animation-play-state:paused; animation-play-state:paused; }
 
   .head .when .v { margin-top:1px; font-size:30px; font-weight:500; letter-spacing:-.012em;
                    font-variant-numeric:tabular-nums; }
@@ -236,6 +241,20 @@
   .page.b .head .mark { fill:#D97757; }
   .page.b .j .sb b { color:#D97757; }
 
+  .page.c .head .mark { object-fit:contain; }
+  .page.c .j .sb b { color:#76D99E; }
+  .page.d .head .mark {
+    background-image:url(deepseek.png); background-repeat:no-repeat;
+    background-position:left center; background-size:160px auto;
+    -webkit-filter:brightness(0) invert(1); filter:brightness(0) invert(1);
+  }
+  .page.d .head .when { text-shadow:0 1px 10px rgba(0,0,0,.6); }
+  .page.d .j .sb b { color:#75ADFF; }
+  .page.d .photo { -webkit-animation:none; animation:none; }
+  .u.money .big { font-size:72px; line-height:1.575; letter-spacing:-.035em; }
+  .u.money .big i { font-size:38px; margin-left:0; margin-right:4px; }
+  .u.credits .big { font-size:64px; line-height:1.77; letter-spacing:-.035em; }
+
   body.offline .card { -webkit-filter:grayscale(1); filter:grayscale(1); }
 
   /* ── 视频背景（仅 Codex 页）──
@@ -254,8 +273,7 @@
   html.page-hidden .photo, html.page-hidden .cl, html.page-hidden .j, html.page-hidden .j::before {
     -webkit-animation-play-state:paused; animation-play-state:paused;
   }
-  .deck:not(.p1) .page.b *, .deck.p1 .page.a *,
-  .deck:not(.p1) .page.b .j::before, .deck.p1 .page.a .j::before {
+  .page:not(.active) *, .page:not(.active) .j::before {
     -webkit-animation-play-state:paused !important; animation-play-state:paused !important;
   }
   html.stable .photo, html.stable .cl, html.stable .j, html.stable .mv, html.stable .j::before {
@@ -270,7 +288,7 @@
 <body>
   <div class="stage">
   <div class="deck" id="deck">
-    <div class="page a" data-k="codex">
+    <div class="page a active" data-k="codex">
     <div class="card">
       <video class="vid" muted loop playsinline webkit-playsinline preload="auto"></video>
       <div class="photo s-ridge"></div>
@@ -352,9 +370,85 @@
       </div>
     </div>
     </div>
+    <div class="page c" data-k="workbuddy">
+    <div class="card">
+      <div class="photo s-plants"></div>
+    <div class="photo"></div>
+        <div class="veil"></div>
+
+      <div class="inner">
+        <div class="head">
+          <img class="mark" src="workbuddy.png" alt="">
+          <div class="id">
+            <div class="nm">WorkBuddy</div>
+          </div>
+          <div class="when">
+            <div class="d today">—</div>
+            <div class="v clock"><span class="hh">--</span><span class="cl">:</span><span class="mm">--</span></div>
+          </div>
+        </div>
+
+        <div class="usage">
+          <div class="u">
+            <div class="lb">Credits Remaining</div>
+            <div class="big">—</div>
+            <div class="frac"></div>
+          </div>
+          <div class="u">
+            <div class="lb">Credits Left</div>
+            <div class="big">—</div>
+            <div class="frac"></div>
+          </div>
+          <div class="motto">Small<br>tasks.<br>Big progress.</div>
+        </div>
+
+        <div class="recent">
+          <div class="jobs"></div>
+        </div>
+      </div>
+    </div>
+    </div>
+    <div class="page d" data-k="deepseek">
+    <div class="card">
+      <div class="photo s-whale"></div>
+    <div class="photo"></div>
+        <div class="veil"></div>
+
+      <div class="inner">
+        <div class="head">
+          <span class="mark" role="img" aria-label="DeepSeek"></span>
+          <div class="id">
+            <div class="nm">DeepSeek</div>
+          </div>
+          <div class="when">
+            <div class="d today">—</div>
+            <div class="v clock"><span class="hh">--</span><span class="cl">:</span><span class="mm">--</span></div>
+          </div>
+        </div>
+
+        <div class="usage">
+          <div class="u">
+            <div class="lb">Total Balance</div>
+            <div class="big">—</div>
+            <div class="frac"></div>
+          </div>
+          <div class="u">
+            <div class="lb">Granted Balance</div>
+            <div class="big">—</div>
+            <div class="frac"></div>
+          </div>
+          <div class="motto">Small<br>tasks.<br>Big progress.</div>
+        </div>
+
+        <div class="recent">
+          <div class="jobs"></div>
+        </div>
+      </div>
+    </div>
+    </div>
   </div>
   </div>
-  <div class="dots" id="dots"><i class="on"></i><i></i></div>
+  <div class="dots" id="dots"><i class="on"></i><i></i><i></i><i></i></div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -385,6 +479,19 @@ function resetLine(w) {
 
 function quota(box, w, used) {
   const big = box.querySelector('.big'), frac = box.querySelector('.frac');
+  if (w && w.amount !== undefined) {
+    box.className = 'u money';
+    const symbol = w.currency === 'CNY' ? '¥' : '$';
+    big.innerHTML = '<i>' + symbol + '</i>' + w.amount.toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 });
+    frac.textContent = w.currency + ' · ' + w.note;
+    return;
+  }
+  if (w && (w.credits !== undefined || w.unlimited)) {
+    box.className = 'u credits';
+    big.textContent = w.unlimited ? '∞' : w.credits.toLocaleString('en-US', { maximumFractionDigits:2 });
+    frac.textContent = w.unlimited ? 'Unlimited' : 'of ' + w.total.toLocaleString('en-US') + ' credits';
+    return;
+  }
   if (!w || w.remaining === undefined) {
     box.className = 'u'; big.textContent = '—'; frac.textContent = '';
     return;
@@ -445,7 +552,7 @@ function renderJobs(page, tasks) {
   const key = items.map(t => t.project + '|' + t.state).join('~');
   const jobs = page.el.querySelector('.jobs');
 
-  // 两页各留一份 key，否则会互相抑制 DOM 重建，走马灯和高亮全乱
+  // 每页各留一份 key，否则会互相抑制 DOM 重建，走马灯和高亮全乱
   if (key !== page.key) {
     page.key = key;
     jobs.innerHTML = items.length ? items.map(t => `
@@ -455,7 +562,7 @@ function renderJobs(page, tasks) {
           <div class="tt"><div class="mv"><span>${esc(t.project || 'Codex')}</span></div></div>
           <div class="sb"></div>
         </div>
-      </div>`).join('') : '<div class="empty">暂无任务</div>';
+      </div>`).join('') : '<div class="empty">' + (page === PAGES.deepseek ? '暂无 DeepSeek 任务' : '暂无任务') + '</div>';
     marquee(jobs);
   }
 
@@ -484,13 +591,16 @@ function marquee(jobs) {
   }
 }
 
-// 两页各自的元素和渲染状态。key 必须分开存，否则两页互相抑制 DOM 重建。
+// 每页各自的元素和渲染状态，互不打断走马灯。
 const PAGES = {
   // used: 跟随各自官方的展示口径 —— Codex 讲「还剩多少」，Claude 讲「用了多少」
   codex:  { el: document.querySelector('.page.a'), key: null, used: false },
   claude: { el: document.querySelector('.page.b'), key: null, used: true },
+  workbuddy: { el: document.querySelector('.page.c'), key: null, used: false },
+  deepseek: { el: document.querySelector('.page.d'), key: null, used: false },
 };
 const deck = $('deck'), dotEls = $('dots').children;
+const PAGE_KEYS = ['codex', 'claude', 'workbuddy', 'deepseek'];
 
 // ── 显示哪一页 ──
 let view = 'codex', pin = null, pinAt = 0;
@@ -526,10 +636,14 @@ function show(k) {
   if (k === view || !PAGES[k]) return;
   view = k;
   // 分页状态挂 deck 不挂 body：render() 每次都会清掉 body.className
-  deck.classList.toggle('p1', k === 'claude');   // 用 toggle，别整体赋值——会冲掉 dragging
+  deck.classList.toggle('p1', k === 'claude');
+  deck.classList.toggle('p2', k === 'workbuddy');
+  deck.classList.toggle('p3', k === 'deepseek');   // 用 toggle，别整体赋值——会冲掉 dragging
   syncVideos();
-  dotEls[0].className = k === 'codex' ? 'on' : '';
-  dotEls[1].className = k === 'claude' ? 'on' : '';
+  PAGE_KEYS.forEach(function (key, i) {
+    PAGES[key].el.classList.toggle('active', key === k);
+    dotEls[i].className = key === k ? 'on' : '';
+  });
 }
 
 function pinTo(k) { pin = k; pinAt = Date.now(); show(k); }   // 手动：临时钉住
@@ -546,6 +660,9 @@ function renderPage(page, a) {
   const us = page.el.querySelectorAll('.u'), u = a.usage || {};
   quota(us[0], u.primary, page.used);
   quota(us[1], u.secondary, page.used);
+  if ((page === PAGES.workbuddy || page === PAGES.deepseek) && !a.usage) {
+    us[0].querySelector('.frac').textContent = 'Usage unavailable';
+  }
   renderJobs(page, a.tasks);
 }
 
@@ -637,7 +754,10 @@ document.addEventListener('visibilitychange', function () {
 const SNAP = 200;      // 拖过这么多才翻页，否则弹回原处
 let drag = false, startX = 0, startY = 0, baseX = 0, axis = null, lastTouch = 0;
 
-function baseOf(k) { return k === 'claude' ? -800 : 0; }
+function baseOf(k) { return -800 * PAGE_KEYS.indexOf(k); }
+function adjacent(step) {
+  return PAGE_KEYS[Math.max(0, Math.min(PAGE_KEYS.length - 1, PAGE_KEYS.indexOf(view) + step))];
+}
 
 document.addEventListener('touchstart', function (e) {
   const t = e.changedTouches[0];
@@ -656,8 +776,8 @@ document.addEventListener('touchmove', function (e) {
     axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
   }
   if (axis !== 'x') return;
-  // 夹在两页之间，滑不出界
-  const x = Math.max(-800, Math.min(0, baseX + dx));
+  // 夹在首尾页之间，滑不出界
+  const x = Math.max(-800 * (PAGE_KEYS.length - 1), Math.min(0, baseX + dx));
   deck.style.webkitTransform = deck.style.transform = 'translateX(' + x + 'px)';
 }, false);
 
@@ -673,7 +793,7 @@ function endDrag(e) {
   if (axis !== 'x') return;
   const dx = e.changedTouches[0].clientX - startX;
   // 拖够了就翻页，不够就吸回原处——无论如何都停在整页上
-  pinTo(Math.abs(dx) >= SNAP ? (dx < 0 ? 'claude' : 'codex') : view);
+  pinTo(e.type !== 'touchcancel' && Math.abs(dx) >= SNAP ? adjacent(dx < 0 ? 1 : -1) : view);
 }
 document.addEventListener('touchend', endDrag, false);
 document.addEventListener('touchcancel', endDrag, false);
@@ -682,7 +802,8 @@ document.addEventListener('touchcancel', endDrag, false);
 document.addEventListener('click', function (e) {
   if (Date.now() - lastTouch < 700) return;      // 滑动尾部会补一个 click，滤掉
   if (e.target.className.indexOf && e.target.className.indexOf('go') >= 0) return;
-  pinTo(e.clientX < 400 ? 'codex' : 'claude');
+  const dot = Array.prototype.indexOf.call(dotEls, e.target);
+  pinTo(dot >= 0 ? PAGE_KEYS[dot] : adjacent(e.clientX < 400 ? -1 : 1));
 }, false);
 
 // ── 背景轮换 ──
@@ -691,6 +812,8 @@ document.addEventListener('click', function (e) {
 const SHOTS = {
   codex:  ['s-ridge', 's-alex'],
   claude: ['s-canyon', 's-joc', 's-yun'],
+  workbuddy: ['s-plants'],
+  deepseek: ['s-whale'],
 };
 const SHOT_MS = 90000;    // 1.5 分钟
 
@@ -726,11 +849,11 @@ function advance(page, shots) {
 
 setInterval(function () {
   if (stable || offline >= 3) return;  // 稳定模式使用静态背景
-  for (const k in PAGES) advance(PAGES[k], SHOTS[k]);
+  if (!document.hidden && SHOTS[view].length > 1) advance(PAGES[view], SHOTS[view]);
 }, SHOT_MS);
 
-// ?page=codex|claude 固定某一页：触摸万一不可用时的退路，也方便对着看
-const forced = location.search.match(/[?&]page=(codex|claude)/);
+// ?page=codex|claude|workbuddy|deepseek 固定某一页：触摸万一不可用时的退路，也方便对着看
+const forced = location.search.match(/[?&]page=(codex|claude|workbuddy|deepseek)(?:&|$)/);
 if (forced) pinTo(forced[1]);
 
 tick();
@@ -754,7 +877,7 @@ setInterval(blinkClock, 500);
     v.addEventListener('loadeddata', (function (s, el) {
       return function () {
         if (!el.getAttribute('src') || document.hidden || offline >= 3 ||
-            (s === 'a') !== (view === 'codex')) return;
+            view !== (s === 'a' ? 'codex' : 'claude')) return;
         if (el.paused) {
           const pp = el.play();
           if (pp && pp.catch) pp.catch(function () {});

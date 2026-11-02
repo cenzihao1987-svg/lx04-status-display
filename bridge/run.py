@@ -22,6 +22,8 @@ sys.path.insert(0, str(ROOT / "vendor" / "mibe"))
 import mibe  # noqa: E402
 
 import claude  # noqa: E402  bridge/claude.py，Claude 侧的采集
+import workbuddy  # noqa: E402  bridge/workbuddy.py，只读本机任务和账号积分
+import deepseek  # noqa: E402  bridge/deepseek.py，只读 API 余额和本机会话
 
 DISPLAY = ROOT / "display"
 # 页面要的静态资源就这几类，多的不开
@@ -59,7 +61,8 @@ def _new_agent(name):
     }
 
 
-AGENTS = {"codex": _new_agent("Codex"), "claude": _new_agent("Claude")}
+AGENTS = {"codex": _new_agent("Codex"), "claude": _new_agent("Claude"),
+          "workbuddy": _new_agent("WorkBuddy"), "deepseek": _new_agent("DeepSeek")}
 _active = "codex"  # 当前该显示谁
 
 # 播报开关。没登录小米（--no-speaker）时 _can_speak 为 False，屏幕上不显示开关。
@@ -162,7 +165,10 @@ def _seed_codex(agent, limit=3):
         try:
             with path.open(encoding="utf-8", errors="ignore") as fh:
                 try:
-                    cwd = (json.loads(fh.readline()).get("payload") or {}).get("cwd")
+                    meta = json.loads(fh.readline()).get("payload") or {}
+                    if str(meta.get("model_provider", "")).lower() == "deepseek":
+                        continue
+                    cwd = meta.get("cwd")
                 except ValueError:
                     continue
                 if not cwd:
@@ -208,6 +214,8 @@ def observe(event, path, notifier):
     """mibe.STATUS_OBSERVER 挂载点，每条 Codex 事件都会走这里。"""
     global _notifier
 
+    if deepseek.is_deepseek_session(path):
+        return  # DeepSeek 独立采集，不把同一任务同时算进 Codex 页
     agent = AGENTS["codex"]
     # 开关真值在 bridge 这边，趁 mibe 用它之前同步过去（本函数就跑在播报逻辑之前）
     _notifier = notifier
@@ -305,6 +313,49 @@ def _claude_loop():
             _claude_tick()
         except Exception as exc:  # 采集出问题绝不能带走进程
             print(f"[claude] 采集失败：{exc}", file=sys.stderr)
+        time.sleep(2)
+
+
+def _workbuddy_tick():
+    tasks = workbuddy.read_tasks(limit=3)
+    usage = workbuddy.read_usage()
+    with _lock:
+        agent = AGENTS["workbuddy"]
+        agent["tasks"] = tasks
+        agent["current"] = next(iter(tasks), None)
+        agent["usage"] = usage
+        if tasks:
+            agent["last_event"] = max(t["updated_at"] for t in tasks.values())
+
+
+def _workbuddy_loop():
+    # 网络或登录失败只影响这一页，不阻塞 Codex、Claude 与 HTTP 应答。
+    while True:
+        try:
+            _workbuddy_tick()
+        except Exception:
+            print("[workbuddy] 本次采集失败", file=sys.stderr)
+        time.sleep(2)
+
+
+def _deepseek_tick():
+    tasks = deepseek.read_tasks(limit=3)
+    usage = deepseek.read_usage()
+    with _lock:
+        agent = AGENTS["deepseek"]
+        agent["tasks"] = tasks
+        agent["current"] = next(iter(tasks), None)
+        agent["usage"] = usage
+        if tasks:
+            agent["last_event"] = max(t["updated_at"] for t in tasks.values())
+
+
+def _deepseek_loop():
+    while True:
+        try:
+            _deepseek_tick()
+        except Exception:
+            print("[deepseek] 本次采集失败", file=sys.stderr)
         time.sleep(2)
 
 
@@ -567,6 +618,8 @@ def main():
     except Exception as exc:
         print(f"[claude] 首次采集失败：{exc}", file=sys.stderr)
     threading.Thread(target=_claude_loop, daemon=True).start()
+    threading.Thread(target=_workbuddy_loop, daemon=True).start()
+    threading.Thread(target=_deepseek_loop, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 

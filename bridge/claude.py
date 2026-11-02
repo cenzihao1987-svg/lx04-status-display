@@ -166,7 +166,7 @@ def read_tasks(limit=3):
 
 
 # ── 额度：解 Claude Desktop 的 Chromium 磁盘缓存 ──
-_cache = {"path": None, "mtime": 0.0, "value": None, "scanned": 0.0}
+_cache = {"mtime": 0.0, "value": None, "scanned": 0.0, "seen": 0.0}
 
 
 def _decode_entry(raw):
@@ -225,10 +225,14 @@ def _parse(text):
 def _read_path(path):
     raw = path.read_bytes()
     key, body = _decode_entry(raw)
-    if not key or "/usage" not in key or "organizations" not in key:
+    if not _is_usage(key):
         return None
     text = _unzstd(body)
     return _parse(text) if text else None
+
+
+def _is_usage(key):
+    return bool(key) and "/usage" in key and "organizations" in key
 
 
 def read_usage():
@@ -238,42 +242,46 @@ def read_usage():
     宁可返回 None 让页面显示「—」，也不显示过期的数字。
     """
     now = time.time()
+    if now - _cache["scanned"] >= 30:  # 缓存目录有几万个文件，每 2 秒 stat 一遍不划算
+        _cache["scanned"] = now
+        _rescan()
+    return _fresh(_cache["value"], _cache["mtime"], now)
 
-    # 上次命中的条目还在且没变，直接用缓存（一次 stat 的事）
-    if _cache["path"]:
-        try:
-            mtime = _cache["path"].stat().st_mtime
-            if mtime != _cache["mtime"]:
-                value = _read_path(_cache["path"])
-                if value:
-                    _cache.update(mtime=mtime, value=value)
-            fresh = _fresh(_cache["value"], _cache["mtime"], now)
-            if fresh:
-                return fresh
-            # 拿到的是陈旧数据：不能就这么返回 None 卡死，
-            # Claude Desktop 多半已经把新响应写进另一个条目了，往下重扫
-        except (OSError, ValueError, struct.error, subprocess.SubprocessError):
-            pass
-        _cache["path"] = None
 
-    if now - _cache["scanned"] < 30:  # Claude Desktop 没装时别每 2 秒白扫上万个文件
-        return _fresh(_cache["value"], _cache["mtime"], now)
-    _cache["scanned"] = now
+def _rescan():
+    """在上次扫描之后新写入的缓存文件里，找最新的一条额度响应。
 
+    不能盯着某一个缓存文件刷新：Claude Desktop 会用好几种查询参数请求同一个接口
+    （/usage、?skip_spend=1、?cedar_ember=1…），每种 URL 在磁盘缓存里是独立的一条。
+    之前就是锁在其中一条上，别的条目里的新响应全看不见，屏幕卡在几小时前的数。
+    """
+    newer = []
     try:
-        files = sorted(CACHE.glob("*_0"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for p in CACHE.glob("*_0"):
+            try:
+                m = p.stat().st_mtime
+            except OSError:  # 扫描途中被 Chromium 淘汰了
+                continue
+            if m > _cache["seen"]:
+                newer.append((m, p))
     except OSError:
-        return None
-    for path in files:
+        return
+    if not newer:
+        return
+    _cache["seen"] = max(m for m, _ in newer)
+    # 新到旧，第一条额度响应就是最新的。先只读文件头看 key，免得把图片、脚本整个读进来
+    for m, p in sorted(newer, reverse=True):
         try:
-            value = _read_path(path)
+            with p.open("rb") as fh:
+                key, _ = _decode_entry(fh.read(24 + 4096))
+            if not _is_usage(key):
+                continue
+            value = _read_path(p)
         except (OSError, ValueError, struct.error, subprocess.SubprocessError):
             continue
         if value:
-            mtime = path.stat().st_mtime
-            _cache.update(path=path, mtime=mtime, value=value)
-            return _fresh(value, mtime, now)
-    return None
+            _cache.update(mtime=m, value=value)
+            return
 
 
 def _fresh(value, mtime, now):
